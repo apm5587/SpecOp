@@ -746,7 +746,8 @@ def aperture_algorithm(sci_data, lambdas, lam_guess, y_guess, x_guess):
         xcom, ycom = centroid_aperture(include_centroid, flattened_image)
 
         #show centroid
-        fig, ax = display_img(flattened_image)
+        fig, ax = display_img(flattened_image,
+                              'Centroid over '+str(wav_range)+' wavelength bins')
         rec = Rectangle((xcom-0.5,ycom-0.5),1,1,
                         linewidth=1,edgecolor='r',facecolor='none')
         ax.add_patch(rec)
@@ -915,8 +916,7 @@ def simple(sci_data, err_data, lambdas, N_contours, f, P, reject):
     print('Performing S/N weighted average...')
 
     lambdas, total_weighted_counts, total_err = weighted_sum_counts(included_pix, sci_data, err_data,
-                                                                    lambdas, lam_min_idx, lam_max_idx,
-                                                                    P, reject)
+                                                                    lambdas, P, reject)
     '''
     total_weighted_counts = np.zeros(len(lambdas))
     total_counts = np.zeros(len(lambdas))
