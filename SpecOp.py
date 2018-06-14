@@ -1,7 +1,7 @@
 import numpy as np
 import numpy.ma as ma
 import matplotlib
-matplotlib.use('TkAgg')
+matplotlib.use('TkAgg') #absolutely essential!!!
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle, Rectangle
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg 
@@ -54,16 +54,15 @@ def gui_process_select():
     return arg_list_NONLOCAL_Proc
 
 def gui_inputs_G():
-    args = ['Method', 'P', 'Lambda min', 'Lambda max',  'reject', 'write', 'fout', 'fmt']
-    defaults = ['auto', '1.0', '', '', 'False', 'False', '', 'ascii.basic']
+    args = ['Method', 'P', 'Lambda min', 'Lambda max',  'reject', 'fout', 'fmt']
+    defaults = ['auto', '1.0', '', '', 'False', '', 'ascii.basic']
     descriptions = ['Extraction algorithm, auto or manual',
                     'Power of S/N weighted average',
                     'Beginning of wavelength range (Angstroms, smallest possible if blank)',
                     'End of wavelength range (Angstroms, largest possible if blank)',
                     'Reject pixels with negative counts and |S/N| < 1/3',
-                    'If True, the program will write a table containing wavelengths, counts, and errors',
-                    'Name of output file (only if write is True)',
-                    'Format of table (only if write is True)']
+                    'Name of output table (leave blank to not save a table)',
+                    'Format of table (eg: ascii.basic, ascii.csv, fits, and more)']
 
     master = tk.Tk()
     master.wm_title('Grey Extraction Options')
@@ -95,8 +94,8 @@ def gui_inputs_G():
 
 def gui_inputs_BW():
 
-    args = ['Method', 'f', 'P', 'Lambda min', 'Lambda max', 'Lambda Intervals', 'N Contours', 'reject', 'write', 'fout', 'fmt']
-    defaults = ['optimal', '0.95', '1.0', '', '', '1', '100', 'False', 'False', '', 'ascii.basic']
+    args = ['Method', 'f', 'P', 'Lambda min', 'Lambda max', 'Lambda Intervals', 'N Contours', 'reject', 'fout', 'fmt']
+    defaults = ['optimal', '0.95', '1.0', '', '', '1', '100', 'False', '', 'ascii.basic']
     descriptions = ['Extraction algorithm, simple or optimal',
                     'Fraction of light used to calculate include pixels',
                     'Power of S/N weighted average',
@@ -105,9 +104,8 @@ def gui_inputs_BW():
                     'Number of intervals into which wavelength range is divided',
                     'Number of contours used to find pixels satisfying enclosed light fraction.',
                     'Reject pixels with negative counts and |S/N| < 1/3',
-                    'If True, the program will write a table containing wavelengths, counts, and errors',
-                    'Name of output file (only if write is True)',
-                    'Format of table (only if write is True)']
+                    'Name of output table (leave blank to not save a table)',
+                    'Format of table (eg: ascii.basic, ascii.csv, fits, and more)']
         
     master = tk.Tk()
     master.wm_title('Black and White Extraction Options')
@@ -575,11 +573,14 @@ def contour_extraction(data, lam_min, lam_max, N_contours, f):
     ax.set_xlim( (0,horiz) )
     ax.set_ylim( (0,vert) ) 
     plt.show()
-    blah = input('Press enter to proceed')
+    proceed = check_YorN('Proceed with this process (Y/N)?')
     plt.close()
     plt.ioff()
-
-    return pix_inside
+    if not proceed:
+        #abort this process entirely
+        return None
+    else:
+        return pix_inside
 
 def strict_distance_clip(xcom, ycom, r):
     
@@ -970,6 +971,8 @@ def optimal(sci_data, err_data, lambdas, lam_intervals, N_contours, f, reject):
         lam_max = np.argmin(np.abs(lambdas-lambda_split[j][-1]))
 
         included_pix = contour_extraction(sci_data, lam_min, lam_max, N_contours, f)
+        if included_pix == None:
+            return lambdas, None, None
     
         #xcom, ycom = centroid(sci_data, vert, horiz, lam_min_idx, lam_max_idx)
         #rmax = find_r_scatter(sci_data, xcom, ycom, f, horiz, vert)
@@ -1033,13 +1036,11 @@ def extract(fname):
     Extract spectrum in high S/N region using S/N weighted average 
     '''
 
-    deviation = False
+    #deviation = False
     print('Loading data...')
     lam_len, lam_init, lam_delt, lam_end, sci_data, err_data, lambdas = get_data(fname)
-    #global vert
-    #global horiz
 
-    #show user a flattened image to decide on BW or G
+    #show user a flattened image to decide between BW or G
     plt.ion()
     fig, ax = display_img(np.sum(sci_data, axis=0), 'Image summed over all wavelengths')
     plt.show()
@@ -1064,21 +1065,25 @@ def extract(fname):
     plt.ioff()
     
     if BlacknWhite:  
-        method, f, P, lam_min, lam_max, lam_intervals, N_contours, reject, write, fout, fmt = gui_inputs_BW()
+        method, f, P, lam_min, lam_max, lam_intervals, N_contours, reject, fout, fmt = gui_inputs_BW()
 
         f = float(f)
         P = float(P)
         lam_intervals = int(lam_intervals)
         N_contours = int(N_contours)
         reject = to_bool(reject)
-        write = to_bool(write)
+        #write = to_bool(write)
         
     elif Grey:
-        method, P, lam_min, lam_max, reject, write, fout, fmt = gui_inputs_G()
+        method, P, lam_min, lam_max, reject, fout, fmt = gui_inputs_G()
 
         P = float(P)
         reject = to_bool(reject)
-        write = to_bool(write)
+
+    if len(fout) == 0:
+        write = False
+    else:
+        write = True
 
     ### Clip Wavelength Range ###
     if lam_min == '':
@@ -1103,17 +1108,21 @@ def extract(fname):
     if method == 'optimal':
         lambdas, total_weighted_counts, total_err = optimal(sci_data, err_data, lambdas,
                                                             lam_intervals, N_contours, f, reject)
+        if total_weighted_counts == None:
+            print('Switching to \'auto\' from the Grey process', '\n')
+            method = 'auto'
     if method == 'auto':
         lambdas, total_weighted_counts, total_err = auto_extract(sci_data, err_data, lambdas,
                                                                  P, reject)
     if method == 'manual':
         lambdas, total_weighted_counts, total_err = manual_extract(sci_data, err_data, lambdas,
-                                                                 P, reject)
+                                                                   P, reject)
+    '''
     if deviation:
         mu, sig = calc_deviation(total_weighted_counts, total_err, lambdas, 6650, 6750)
         print('Deviation Test:', mu, sig)
         print('Error:', sig/mu)
-        
+    ''' 
         
     ### Plot Final Spectrum ###
     print('Displaying spectrum quicklook...', '\n')
@@ -1144,15 +1153,42 @@ def extract(fname):
     
     if write:
         print('Writing data to ' + fmt + ' table with name ' + fout + '...', '\n')
-        tout = Table(data = [lambdas, total_weighted_counts, total_err], names = ['Wavelength', 'Counts', 'Error'])
-        tout.write(fout, format = fmt)
-        return
+        if fmt == 'fits':
+            #call fits writing function
+            write_fits_table(fname, fout, lambdas, total_weighted_counts, total_err)
+            return
+            
+        else:
+            tout = Table(data = [lambdas, total_weighted_counts, total_err], names = ['Wavelength', 'Counts', 'Error'])
+            tout.write(fout, format = fmt)
+            return
     
     else:
         print('Returning arrays of wavelength, weighted counts, and errors...', '\n')
         return lambdas, total_weighted_counts, total_err
 
+def write_fits_table(fname, fout, lambdas, total_weighted_counts, total_err):
+    #modified from http://docs.astropy.org/en/stable/io/fits/
+    hdu = fits.BinTableHDU.from_columns([fits.Column(name='Wavelength', array=lambdas, format ='E'),
+                                         fits.Column(name='Counts', array=total_weighted_counts, format='E'),
+                                         fits.Column(name='Error', array=total_err, format='E')])
+    hdr = fits.getheader(fname)
+    primary_hdu = fits.PrimaryHDU(header=hdr)
+    hdul = fits.HDUList([primary_hdu, hdu])
+    hdul.writeto(fout)
+    return
+    
 
+####### MAIN #######
+#calls extract through command line
+####################
+if len(sys.argv) == 2:
+    cmnd_fname = sys.argv[1]
+    extract(cmnd_fname)
+else:
+    print('Error, script takes one argument, the filename.')
+    print('example:')
+    print('$ python SpecOp.py Cu*.fits')
 
 
     
