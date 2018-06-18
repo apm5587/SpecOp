@@ -1,5 +1,6 @@
 import numpy as np
 from astropy.io import fits
+import sys
 
 def add(exp_names):
     
@@ -28,7 +29,8 @@ def add(exp_names):
     for exp in data:
         combined_data+=exp
     for exp in e_data:
-        e_combined_data+=exp #do I need to do this in quadrature?
+        e_combined_data+=exp**2. #do I need to do this in quadrature?
+    e_combined_data = e_combined_data**(0.5)
 
     #update header exposure times
     keywords = ['REXPTIME', 'PEXPTIME', 'DARKTIME', 'READTIME', 'EXPTIME']
@@ -61,4 +63,6 @@ def add(exp_names):
 
     return
 
-    
+### Call from command line ###
+cmnd_exp_names = sys.argv[1:]
+add(cmnd_exp_names) 

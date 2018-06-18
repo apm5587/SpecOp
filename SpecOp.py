@@ -971,8 +971,11 @@ def optimal(sci_data, err_data, lambdas, lam_intervals, N_contours, f, reject):
         lam_max = np.argmin(np.abs(lambdas-lambda_split[j][-1]))
 
         included_pix = contour_extraction(sci_data, lam_min, lam_max, N_contours, f)
-        if included_pix == None:
-            return lambdas, None, None
+        try:
+            if included_pix == None:
+                return lambdas, None, None
+        except ValueError:
+            pass
     
         #xcom, ycom = centroid(sci_data, vert, horiz, lam_min_idx, lam_max_idx)
         #rmax = find_r_scatter(sci_data, xcom, ycom, f, horiz, vert)
@@ -1108,9 +1111,12 @@ def extract(fname):
     if method == 'optimal':
         lambdas, total_weighted_counts, total_err = optimal(sci_data, err_data, lambdas,
                                                             lam_intervals, N_contours, f, reject)
-        if total_weighted_counts == None:
-            print('Switching to \'auto\' from the Grey process', '\n')
-            method = 'auto'
+        try:
+            if total_weighted_counts == None:
+                print('Switching to \'auto\' from the Grey process', '\n')
+                method = 'auto'
+        except ValueError:
+            pass
     if method == 'auto':
         lambdas, total_weighted_counts, total_err = auto_extract(sci_data, err_data, lambdas,
                                                                  P, reject)
@@ -1157,7 +1163,12 @@ def extract(fname):
             #call fits writing function
             write_fits_table(fname, fout, lambdas, total_weighted_counts, total_err)
             return
-            
+        elif len(fmt)>5:
+            if fmt[0:5] == 'ascii':
+                #call header writing function
+                tout = Table(data = [lambdas, total_weighted_counts, total_err], names = ['Wavelength', 'Counts', 'Error'])
+                tout.write(fout, format = fmt)
+                write_ascii_header(fname, fout)
         else:
             tout = Table(data = [lambdas, total_weighted_counts, total_err], names = ['Wavelength', 'Counts', 'Error'])
             tout.write(fout, format = fmt)
@@ -1177,11 +1188,57 @@ def write_fits_table(fname, fout, lambdas, total_weighted_counts, total_err):
     hdul = fits.HDUList([primary_hdu, hdu])
     hdul.writeto(fout)
     return
+
+def write_ascii_header(fname, fout):
+    keywords = ['DATE', 'TELRA', 'TELDEC', 'ZD', 'EXPTIME']
+    kw_len = 8
+    eql = '= '
+    val_len = 20
+    cmt_len = 49 #give space for '#' at beginning of line (otherwise 50)
+    hdr = fits.getheader(fname)
+    vals = []
+    comments = []
+    for kw in keywords:
+        vals.append(str(hdr[kw]))
+        comments.append(' / ' + hdr.comments[kw])
+    for i in range(len(keywords)):
+        while len(keywords[i]) < kw_len:
+            keywords[i]+=' '
+        while len(vals[i]) < val_len:
+            vals[i]+=' '
+        while len(comments[i]) < cmt_len:
+            comments[i]+=' '
+
+    header_string = ''
+    for i in range(len(keywords)):
+        header_string+='#'+keywords[i]
+        header_string+=eql
+        header_string+=vals[i]
+        header_string+=comments[i]
+    header_string+='\n'
+
+    #now, header_string is correct, 80 character lines..
+    #figure out how to write into a file correctly
+    
+    f = open(fout, "r")
+    contents = f.readlines()
+    f.close()
+    
+    contents[0] = '#' + contents[0] #add octothorpe before column names
+    contents.insert(0, header_string) #put header at very top of file
+
+    f = open(fout, "w")
+    contents = "".join(contents)
+    f.write(contents)
+    f.close()
+    
+    return
+        
     
 
-####### MAIN #######
-#calls extract through command line
-####################
+############### MAIN ###############
+#calls extract through command line#
+####################################
 if len(sys.argv) == 2:
     cmnd_fname = sys.argv[1]
     extract(cmnd_fname)
