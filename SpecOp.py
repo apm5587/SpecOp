@@ -11,7 +11,7 @@ from astropy.table import Table
 import sys                                                                           
 from numpy import pi
 from scipy import interpolate as interp
-from scipy.optimize import curve_fit
+import scipy.integrate as integrate
 
 try:
     import tkinter as tk
@@ -54,13 +54,15 @@ def gui_process_select():
     return arg_list_NONLOCAL_Proc
 
 def gui_inputs_G():
-    args = ['Method', 'P', 'Lambda min', 'Lambda max',  'reject', 'fout', 'fmt']
-    defaults = ['auto', '1.0', '', '', 'False', '', 'ascii.basic']
+    args = ['Method', 'f', 'P', 'Lambda min', 'Lambda max',  'reject', 'strict', 'fout', 'fmt']
+    defaults = ['auto','0.95', '1.0', '', '', 'False', 'True', '', 'ascii.basic']
     descriptions = ['Extraction algorithm, auto or manual',
+                    'Fraction of light used to calculate include pixels',
                     'Power of S/N weighted average',
                     'Beginning of wavelength range (Angstroms, smallest possible if blank)',
                     'End of wavelength range (Angstroms, largest possible if blank)',
                     'Reject pixels with negative counts and |S/N| < 1/3',
+                    'Only include pix if ceneter is within aperture, otherwise any part counts',
                     'Name of output table (leave blank to not save a table)',
                     'Format of table (eg: ascii.basic, ascii.csv, fits, and more)']
 
@@ -210,11 +212,9 @@ def centroid_aperture(included_pix, flat_img):
 
 def centroid(flattened_image):
     '''
-    Find "center of mass" centroid of a data cube
+    Find "center of mass" centroid of a flat image
     '''
     
-    flattened_image = np.sum(data[lam_min:lam_max,:,:], axis = 0)
-
     total_counts = np.sum(flattened_image)
 
     xcom = 0.0
@@ -250,72 +250,8 @@ def manual_centroid(data, y_range, x_range, lam_min, lam_max):
             
     return [xcom, ycom]
 
-'''
-def find_rmax(data, xcom_float, ycom_float, f, horiz, vert):
- 
-    Find radius at which image contains f fraction of light
-   
 
-    xcom = int(np.round(xcom_float,0))
-    ycom = int(np.round(ycom_float,0))
-
-    #Simple sum along wavelength axis
-    flattened_image = np.sum(data, axis = 0)
-
-    xvals = np.arange(xcom, horiz)
-    counts = flattened_image[ycom, xcom:]
-    
-    #Translate profile so it is positive everywhere
-    baseline = np.abs(np.mean(flattened_image[ycom, horiz-3:horiz]))
-    for i in range(0, len(counts)):
-        counts[i] += baseline
-    
-    #Fit a spline to spatial profile 
-    spline = interp.splrep(xvals, counts)
-
-    xnew = np.linspace(xcom_float, horiz, 100)
-    ynew = interp.splev(xnew, spline, der=0)
-    
-    #Integrate that spline to find r
-    total_integral = interp.splint(xcom_float, horiz, spline)
-
-    i = 0
-    frac = 0
-    while frac <= f:
-        frac = interp.splint(xcom_float, xnew[i], spline) / total_integral
-        i+=1
-    i-=1
-    rmax = xnew[i] - xcom_float
-    
-    ### plot in GUI ###
-    master = tk.Tk()
-    master.wm_title('Spatial Profile')
-    fig = plt.figure(1)
-    plt.plot(xvals, counts / total_integral, 'b')
-    plt.plot(xnew, ynew, 'm')
-    plt.plot((xnew[i], xnew[i]), (0, ynew[i]), c = 'r', linewidth = 2.0, linestyle = 'dashed')
-    plt.plot((xcom_float, xcom_float), (0,ynew[0]), c = 'r', linewidth = 2.0, linestyle = 'dashed')
-    plt.axhline(y=0, color = 'k', linestyle = 'dashed')
-    plt.xlabel('Pixel X Value')
-    plt.ylabel('Fractional Counts')
-    plt.text(xnew[i] + (plt.xlim()[1]-plt.xlim()[0])*0.05,
-             ynew[i] + (plt.ylim()[1]-plt.ylim()[0])*0.05,
-             'radius = ' + str(round(rmax,3)) + ' pix')
-    plt.text(plt.xlim()[0] + 0.75*(plt.xlim()[1]-plt.xlim()[0]),
-             plt.ylim()[0] + 0.75*(plt.ylim()[1]-plt.ylim()[0]),
-             'Centroid: \n' + '(' + str(round(xcom_float,3)) + ', ' + str(round(ycom_float,3)) + ')') 
-    
-    canvas = FigureCanvasTkAgg(fig, master=master)
-    plot_widget = canvas.get_tk_widget()
-    plot_widget.grid(row=0, column=0)
-    tk.Button(master, text = 'Close', command = master.quit).grid(row=1, column = 0)
-    master.mainloop()
-    plt.close()
-    master.destroy()
-    
-    return rmax
-'''
-def find_r_scatter(flattened_image, xcom, ycom):
+def find_r_scatter(flattened_image, xcom, ycom, f):
 
     #flattened_image = np.sum(data, axis = 0)
 
@@ -339,7 +275,7 @@ def find_r_scatter(flattened_image, xcom, ycom):
     
     #fit a Gaussian..
     def gauss(x, a, b, c):
-        return a * np.exp((-(x-b)**2.)/(2*(c**2.)))
+        return a * np.exp((-(x-b)**2.)/(2.*(c**2.)))
 
     #add baseline to make sky regions = 0 for fit
     r_percent = 0.10
@@ -368,9 +304,25 @@ def find_r_scatter(flattened_image, xcom, ycom):
     plt.ioff()
 
     #Now, the fit is really good, use FWHM as aperture?
-    r_aperture = (2*np.log(2.))**0.5 * popt[2] #FWHM/2 definition
+    #r_aperture = (2*np.log(2.))**0.5 * popt[2] #FWHM/2 definition
+    #let's do an integral to get the light fraction f instead...
     
-    return r_aperture
+    full_integral, f_i_err = integrate.quad(gauss, 0., np.inf, tuple(popt))
+    max_rad = min([horiz-xcom, xcom, vert-ycom, ycom]) #radius doesn't leave image
+    N_r = 1e3
+    r_vals = np.linspace(0.,max_rad, N_r)
+    dr = max_rad/(N_r-1.)
+    partial_integral = 0.0
+    i = 0
+    frac = 0.0
+    while i < int(N_r):
+        partial_integral += gauss(r_vals[i], *popt) * dr
+        frac = partial_integral/full_integral
+        if frac>f:
+            break
+        i+=1
+    #print("calculated fraction:", frac)
+    return r_vals[i-1], frac, baseline
 
 def distance_formula(x1, x2, y1, y2):
     '''
@@ -445,8 +397,9 @@ def check_intersect(h_line, any_line):
     return intersect
 
 def check_contour(contours, i, bool_grid, pix_inside):
-    almost_vertices = contours.collections[i].get_paths()[0]
-    points = almost_vertices.vertices
+    #almost_vertices = contours.collections[i].get_paths()[0]
+    #points = almost_vertices.vertices
+    points = contours[i]
     x_conts = points[:,0] + np.random.uniform(-0.001, 0.001) #bs, change
     y_conts = points[:,1] + np.random.uniform(-0.001, 0.001) #bs, change
 
@@ -480,12 +433,14 @@ def check_contour(contours, i, bool_grid, pix_inside):
             
     return bool_grid, pix_inside
 
+'''
 def add_half(array):
     for i in range(0, array.shape[0]):
         for j in range(0, array.shape[1]):
             array[i,j] += 0.5
     return array
-        
+'''
+
 def contour_extraction(data, lam_min, lam_max, N_contours, f):
     '''
     resources:
@@ -495,8 +450,12 @@ def contour_extraction(data, lam_min, lam_max, N_contours, f):
     '''
     calc_rad = False
     stopwatch = False
-    
+
     flattened_image = np.sum(data[lam_min:lam_max,:,:], axis = 0)
+    #correct negative background level
+    bg_mean, bg_dev = estimate_background(flattened_image, int(horiz*0.1), int(vert*0.1))
+    #print('background mean:', bg_mean)
+    flattened_image -= bg_mean
     total_counts = np.sum(flattened_image)
 
     g = np.mgrid[0:vert, 0:horiz]
@@ -517,7 +476,40 @@ def contour_extraction(data, lam_min, lam_max, N_contours, f):
     fig, ax = display_img(flattened_image)
     contours = ax.contour(x_coords,y_coords,flattened_image,n)
     n = len(contours.collections)
-    #print("n", n)
+    #nnn = len(contours.allsegs)
+    #print("n:", n)
+    #print("nnn:", nnn)
+    contour_array = np.array([contours.collections[i].get_paths()[0].vertices for i in range(n)])
+    cached_contour_array = np.array(contour_array)#get rid of this soon
+    
+    #remove all open contours as they can cause problems with algorithm
+    
+    #thresh = 0.001
+    problem_idxs = []
+    '''
+    for i in range(n):
+        verts = contour_array[i]
+        if np.abs(verts[0,0]-verts[-1,0])>thresh or np.abs(verts[0,1]-verts[-1,1])>thresh:
+            if not ( (verts[0,1]>=((vert-1)-0.1) and verts[-1,1]>=((vert-1)-0.1)) or (verts[0,1]<0.1 and verts[-1,1]<0.1) ):
+                #contour open and does not go off plot vertically, remove it...
+                print('deleting contour', i)
+                open_idxs.append(i)
+    '''
+    #do I want to check if centroid is near xcom or ycom??? then delete more contours.....
+    #will this replace the culling code above as well? I can't think of any exceptions...
+    r_thresh = 0.1 * (vert**2. + horiz**2.)**0.5 #reasonable fraction of frame diagonal
+    xcom = np.mean(contour_array[-1][:,0])
+    ycom = np.mean(contour_array[-1][:,1])
+    for i in range(n):
+        xavg = np.mean(contour_array[i][:,0])
+        yavg = np.mean(contour_array[i][:,1])
+        #if not ( (min(xs)<=xcom and xcom<=max(xs)) and (min(ys)<=ycom and ycom<=max(ys)) ):
+        if distance_formula(xavg, xcom, yavg, ycom) > r_thresh:
+            #contour does not contain source, delete
+            #print('deleting contour', i)
+            problem_idxs.append(i)
+    contour_array = np.delete(contour_array, problem_idxs, axis=0)
+    n = len(contour_array)
     
     enclosed_light = 0.0
 
@@ -537,7 +529,7 @@ def contour_extraction(data, lam_min, lam_max, N_contours, f):
         cached_bool_grid = np.array(bool_grid)
         cached_pix_inside = list(pix_inside)
 
-        bool_grid, pix_inside = check_contour(contours, i, bool_grid, pix_inside)
+        bool_grid, pix_inside = check_contour(contour_array, i, bool_grid, pix_inside)
         
         temp_sum = 0.0
         for point in pix_inside:
@@ -552,6 +544,9 @@ def contour_extraction(data, lam_min, lam_max, N_contours, f):
             if np.abs(i_low-i_high)<=1:
                 #print("BASE CASE")
                 loop = False
+                #print('numerator:', temp_sum)
+                #print('denom:', total_counts)
+
                 if calc_rad:
                     r_avg, r_err = calc_radius(contours, i, centroid(data, lam_min, lam_max))
                     print("r:", r_avg, "err:", r_err)
@@ -566,61 +561,61 @@ def contour_extraction(data, lam_min, lam_max, N_contours, f):
         print('Time taken: ' + str(round(end-begin,3)))
         
     pix_inside = np.array(pix_inside)
-    ax.plot(pix_inside[:,1], pix_inside[:,0], 'bo', markersize=2.) 
+    ax.plot(pix_inside[:,1], pix_inside[:,0], 'bo', markersize=2.)
+    for indx in problem_idxs:
+        ax.plot(cached_contour_array[indx][:,0],cached_contour_array[indx][:,1], 'r') #get rid of this when done debugging
+    ax.plot(xcom, ycom, 'mo')
     ax.set_title('Enclosed Light Fraction: ' + str(round(enclosed_light,3)), fontsize=20)
     ax.set_xlabel('X pixel', fontsize=14)
     ax.set_ylabel('Y pixel', fontsize=14)
     ax.set_xlim( (0,horiz) )
     ax.set_ylim( (0,vert) ) 
     plt.show()
-    proceed = check_YorN('Proceed with this process (Y/N)?')
+    proceed = check_YorN('Proceed with this process?')
     plt.close()
     plt.ioff()
     if not proceed:
         #abort this process entirely
         return None
     else:
-        return pix_inside
+        return pix_inside, contours #################### CHANGE!!!
 
+'''
 def strict_distance_clip(xcom, ycom, r):
     
-    #If pix center is within radius, include
+    #If pixel center is within radius, include
 
     included_pix = []
 
-    for i in range(0, horiz):
-        for j in range(0, vert):
-            x = i #removed +0.5
-            y = j #removed +0.5
+    for x in range(0, horiz):
+        for y in range(0, vert):
             distance = distance_formula(x, xcom, y, ycom)
             if distance <= r:
-                included_pix.append( (j,i) )
+                included_pix.append( (y,x) )
 
     return included_pix
+'''
 
-
-def loose_distance_clip(data, xcom, ycom, r):
+def pixel_distance_clip(xcom, ycom, r, strict):
     
-    #If any part of pix is within radius, include
-    
+    #If any part of pixel is within radius, include
 
     included_pix = []
-
-    for i in range(0, horiz):
-        for j in range(0, vert):
-            x = i #removed +0.5
-            y = j #removed +0.5
+    print('strict in func:', strict)
+    for x in range(0, horiz):
+        for y in range(0, vert):
             distance = distance_formula(x, xcom, y, ycom)
             if distance <= r:
-                included_pix.append( (j,i) )
-            else:
-                pixdetect = False
-                for a in np.linspace(-0.5, 0.5, 3):
-                    for b in np.linspace(-0.5, 0.5, 3):
-                        if distance_formula(x+a, xcom, y+b, ycom) <= r:
-                            pixdetdect = True
-                if pixdetect:
-                    included_pix.append( (j,i) )
+                included_pix.append( (y,x) )
+            elif not strict:
+                if distance <= r+(2.**0.5):
+                    pix_detect = False
+                    for a in np.linspace(-0.5, 0.5, 3):
+                        for b in np.linspace(-0.5, 0.5, 3):
+                            if distance_formula(x+a, xcom, y+b, ycom) <= r:
+                                pix_detect = True
+                    if pix_detect:
+                        included_pix.append( (y,x) )
 
     return included_pix
 
@@ -643,8 +638,11 @@ def check_YorN(YN_message):
 
     while not understood:
         
-        inputstr = input(YN_message)
-        if len(inputstr)<1 or not inputstr.isalpha():
+        inputstr = input(YN_message + ' [y]/n: ')
+        if inputstr=='':
+            YN_bool = True
+            understood = True
+        elif not inputstr.isalpha():
             pass
         elif inputstr[0]=='y' or inputstr[0]=='Y':
             YN_bool = True
@@ -661,15 +659,19 @@ def check_YorN(YN_message):
     print()
     return YN_bool
 
-def check_number_input(msg, dtype, bounds=[]):
+def check_number_input(msg, dtype, bounds=[], rec_val=None):
 
     #requires upper AND lower bound!!!
     error_dtype_msg = 'Try again. Numeric values only!'
     error_range_msg = 'Value out of bounds!'
     valid = False
+
+    rec = ': '
+    if rec_val != None:
+        rec = ' ('+str(rec_val)+' recommended: )'
     
     while not valid:
-        num = input(msg)
+        num = input(msg+rec)
         try:
             num = dtype(num)
         except ValueError:
@@ -687,6 +689,19 @@ def check_number_input(msg, dtype, bounds=[]):
     print()
     return num
         
+def estimate_background(frame, wx, wy):
+    #frame must be a flat image, numpy array
+    bg_counts = np.array([])
+    #frame = sci_data[lamcoord,:,:] 
+    bg_counts=np.append(bg_counts, frame[0:wy,:].flatten()) #top panel
+    bg_counts=np.append(bg_counts, frame[-wy:,:].flatten()) #bottome panel
+    bg_counts=np.append(bg_counts, frame[wy:-wy,0:wx].flatten()) #left panel (exclduing corners)
+    bg_counts=np.append(bg_counts, frame[wy:-wy,-wx:].flatten()) #right panel (excluding corners)
+
+    bg_mean = np.mean(bg_counts)
+    bg_dev = np.std(bg_counts)
+
+    return bg_mean, bg_dev
 
 def weighted_sum_counts(included_pix, sci_data, err_data, lambdas, P, reject):
 
@@ -725,13 +740,13 @@ def weighted_sum_counts(included_pix, sci_data, err_data, lambdas, P, reject):
         
     return lambdas, total_weighted_counts, total_err
 
-def aperture_algorithm(sci_data, lambdas, lam_guess, y_guess, x_guess):
+def aperture_algorithm(sci_data, lambdas, lam_guess, y_guess, x_guess, f, strict):
     upperbound = min([lam_guess-0, len(lambdas)-lam_guess])
 
     proceed = False
     while not proceed:
-        wav_range = check_number_input('How many wavelength bins to flatten over? ', int,
-                                       [2, 2*upperbound-1])
+        wav_range = check_number_input('How many wavelength bins to flatten over?', int,
+                                       [2, 2*upperbound-1], rec_val=20)
         wav_rad = int(wav_range/2)
     
         plt.ion()
@@ -743,7 +758,7 @@ def aperture_algorithm(sci_data, lambdas, lam_guess, y_guess, x_guess):
         find all pix within that radius, do a centroid, call that the center
         '''
         max_r = min([horiz-x_guess, x_guess, vert-y_guess, y_guess])
-        include_centroid = strict_distance_clip(x_guess, y_guess, max_r)
+        include_centroid = pixel_distance_clip(x_guess, y_guess, max_r, strict=True)
         xcom, ycom = centroid_aperture(include_centroid, flattened_image)
 
         #show centroid
@@ -756,20 +771,22 @@ def aperture_algorithm(sci_data, lambdas, lam_guess, y_guess, x_guess):
         print('Wavelength Range:',
               list(np.round([lambdas[lam_guess-wav_rad],lambdas[lam_guess+wav_rad]], 1)))
         print('Centroid (X,Y):', tuple(np.round((xcom, ycom),2)))
-        proceed = check_YorN('Proceed (Y/N)? ')
+        proceed = check_YorN('Proceed?')
         plt.close()
         print()
+        
     plt.ioff()
+    r_aperture, frac, baseline = find_r_scatter(flattened_image, xcom, ycom, f)
+    included_pix = pixel_distance_clip(xcom, ycom, r_aperture, strict)
 
-    r_aperture = find_r_scatter(flattened_image, xcom, ycom,)
-    included_pix = strict_distance_clip(xcom, ycom, r_aperture)
-
+    flt_bl_img = flattened_image+baseline
+    frac = np.sum([flt_bl_img[coord] for coord in included_pix])/np.sum(flt_bl_img)
     x_pix = np.array(included_pix)[:,1]
     y_pix = np.array(included_pix)[:,0]
 
     #show included pix
     plt.ion()
-    fig, ax = display_img(flattened_image, 'Pixels Within Aperture')
+    fig, ax = display_img(flattened_image, 'Fraction of Light '+str(round(frac,3)))
     ax.plot(x_pix, y_pix, 'bo', markersize=2.)
     circ = Circle((xcom, ycom), radius=r_aperture, linewidth=1, edgecolor='r', facecolor='none')
     ax.add_patch(circ)
@@ -780,14 +797,14 @@ def aperture_algorithm(sci_data, lambdas, lam_guess, y_guess, x_guess):
     
     return included_pix
 
-def manual_extract(sci_data, err_data, lambdas, P, reject):
+def manual_extract(sci_data, err_data, lambdas, P, reject, strict):
 
     #take their guess for x,y,lambda location
     proceed = False
     while not proceed:
-        xcoord = check_number_input('X coordinate guess: ', float, [0,horiz-1])
-        ycoord = check_number_input('Y coordinate guess: ', float, [0,vert-1])
-        lamval = check_number_input('Wavelengths guess (Angstroms): ', float, [lambdas[0], lambdas[-1]])
+        xcoord = check_number_input('X coordinate guess', float, [0,horiz-1])
+        ycoord = check_number_input('Y coordinate guess', float, [0,vert-1])
+        lamval = check_number_input('Wavelengths guess (Angstroms)', float, [lambdas[0], lambdas[-1]])
         lamcoord = np.argmin(np.abs(lambdas-lamval))
 
         #display
@@ -796,18 +813,18 @@ def manual_extract(sci_data, err_data, lambdas, P, reject):
         rec = Rectangle((xcoord-0.5,ycoord-0.5),1,1,
                          linewidth=1,edgecolor='r',facecolor='none')
         ax.add_patch(rec)
-        proceed = check_YorN('Continue with current guess (Y/N)? ')
+        proceed = check_YorN('Continue with current guess?')
         plt.close()
         plt.ioff()
 
     #centroid over wavelength bins
-    included_pix = aperture_algorithm(sci_data, lambdas, lamcoord, ycoord, xcoord)
+    included_pix = aperture_algorithm(sci_data, lambdas, lamcoord, ycoord, xcoord, strict)
     lambdas, total_weighted_counts, total_err = weighted_sum_counts(included_pix, sci_data, err_data,
                                                                     lambdas, P, reject)
 
     return lambdas, total_weighted_counts, total_err
 
-def auto_extract(sci_data, err_data, lambdas, P, reject):
+def auto_extract(sci_data, err_data, lambdas, P, reject, f, strict):
 
     #find object
     proceed = False
@@ -821,14 +838,11 @@ def auto_extract(sci_data, err_data, lambdas, P, reject):
     while not proceed:
         found = False
         if set_frame_params:
-            wx = check_number_input('X background frame width: ', int, [1,int(horiz/2.)-1])
-            wy = check_number_input('Y background frame width: ', int, [1,int(vert/2.)-1])
-            sig_thresh = check_number_input('S/N threshold: ', float, [1,np.inf])
-        while not found: #CORRECT THIS!!!
+            wx = check_number_input('X background frame width', int, [1,int(horiz/2.)-1], rec_val=4)
+            wy = check_number_input('Y background frame width', int, [1,int(vert/2.)-1], rec_val=3)
+            sig_thresh = check_number_input('S/N threshold', float, [1,np.inf], rec_val='>5')
+        while not found:
             max_idx = np.unravel_index(np.argmax(ma_sci_data), ma_sci_data.shape)
-            #make sure these become user-defined
-            #wx = 7 
-            #wy = 4
             lamcoord, ycoord, xcoord = max_idx
             lamval = lambdas[max_idx[0]]
             if wx>xcoord or (horiz-wx)<=xcoord or wy>ycoord or (vert-wy)<=ycoord:
@@ -837,14 +851,8 @@ def auto_extract(sci_data, err_data, lambdas, P, reject):
                 continue
             
             #estimate background
-            bg_counts = np.array([])
-            frame = sci_data[lamcoord,:,:] #masked version proves problematic
-            bg_counts=np.append(bg_counts, frame[0:wy,:].flatten()) #top pannel
-            bg_counts=np.append(bg_counts, frame[-wy:,:].flatten()) #bottome pannel
-            bg_counts=np.append(bg_counts, frame[wy:-wy,0:wx].flatten()) #left pannel (exclduing corners)
-            bg_counts=np.append(bg_counts, frame[wy:-wy,-wx:].flatten()) #right pannel (excluding corners)
-            bg_mean = np.mean(bg_counts)
-            bg_dev = np.std(bg_counts)
+            frame = sci_data[lamcoord,:,:]
+            bg_mean, bg_dev = estimate_background(frame, wx, wy)
             
             #make sure pix and all neighbording pix have signal above N deviations
             increments = [0,-1,1]
@@ -877,21 +885,21 @@ def auto_extract(sci_data, err_data, lambdas, P, reject):
         print('Image Coordinates (X,Y): '+'('+str(xcoord)+','+str(ycoord)+')')
         print('Wavelength (A): '+str(round(lamval,0)))
         print('Detection significance: ' +str(round(det_signif,0)))
-        proceed_msg = 'Is the object contained in this frame (Y/N)? '
+        proceed_msg = 'Is the object contained in this frame?'
         proceed = check_YorN(proceed_msg)
         if proceed:
             center_guess_idx = max_idx
         else:
             #mask,update, keep going
             ma_sci_data.mask[lamcoord,:,:] = 1
-            set_frame_params=check_YorN('Update background params (Y/N)? ')
+            set_frame_params=check_YorN('Update background params?')
             
         plt.close()
     plt.ioff()
     
     #centroid and find pixels within FWHM radius
-    included_pix = aperture_algorithm(sci_data, lambdas, *center_guess_idx)
-   
+    included_pix = aperture_algorithm(sci_data, lambdas, *center_guess_idx, f, strict)
+
     #now, get the spectrum
     print('Performing weighted sum...')
     lambdas, total_weighted_counts, total_err = weighted_sum_counts(included_pix, sci_data, err_data,
@@ -918,40 +926,6 @@ def simple(sci_data, err_data, lambdas, N_contours, f, P, reject):
 
     lambdas, total_weighted_counts, total_err = weighted_sum_counts(included_pix, sci_data, err_data,
                                                                     lambdas, P, reject)
-    '''
-    total_weighted_counts = np.zeros(len(lambdas))
-    total_counts = np.zeros(len(lambdas))
-    total_err = np.zeros(len(lambdas), dtype = float)
-
-    for i in range(lam_min_idx, lam_max_idx):
-
-        #counts = 0
-        numerator_sum = 0
-        denom_sum = 0
-        #err_sum = 0
-        err_numer = 0
-        err_denom = 0
-        for coord_prime in included_pix:
-
-            coord = tuple(coord_prime)
-
-            if reject:
-                if sci_data[i][coord] < 0 and np.abs(sci_data[i][coord] / err_data[i][coord]) < 1./3.:
-                    continue 
-                
-            #counts += sci_data[i][coord]
-            count = sci_data[i][coord]
-            err = err_data[i][coord]
-            SN = np.abs(count/err)
-            numerator_sum += count * (SN**P)
-            denom_sum += SN**P
-            err_numer += (err**2) * ((SN**P)**2)
-            err_denom += (SN**P)
-
-        total_weighted_counts[i] = numerator_sum / denom_sum
-        #total_counts[i] = counts
-        total_err[i] = (err_numer / err_denom**2.)**(0.5)
-    '''
     
     return lambdas, total_weighted_counts, total_err
 
@@ -970,7 +944,7 @@ def optimal(sci_data, err_data, lambdas, lam_intervals, N_contours, f, reject):
         lam_min = np.argmin(np.abs(lambdas-lambda_split[j][0]))
         lam_max = np.argmin(np.abs(lambdas-lambda_split[j][-1]))
 
-        included_pix = contour_extraction(sci_data, lam_min, lam_max, N_contours, f)
+        included_pix, contours = contour_extraction(sci_data, lam_min, lam_max, N_contours, f) ##########CHANGE
         try:
             if included_pix == None:
                 return lambdas, None, None
@@ -1031,7 +1005,7 @@ def optimal(sci_data, err_data, lambdas, lam_intervals, N_contours, f, reject):
     print(total_weighted_counts)
     print(total_err)
         
-    return lambdas, total_weighted_counts, total_err
+    return lambdas, total_weighted_counts, total_err, contours ###################### CHANGE!!!!!!!!
 
 
 def extract(fname):
@@ -1078,10 +1052,12 @@ def extract(fname):
         #write = to_bool(write)
         
     elif Grey:
-        method, P, lam_min, lam_max, reject, fout, fmt = gui_inputs_G()
+        method, f, P, lam_min, lam_max, reject, strict, fout, fmt = gui_inputs_G()
 
+        f = float(f)
         P = float(P)
         reject = to_bool(reject)
+        strict = to_bool(strict)
 
     if len(fout) == 0:
         write = False
@@ -1109,8 +1085,9 @@ def extract(fname):
         lambdas, total_weighted_counts, total_err = simple(sci_data, err_data, lambdas,
                                                            N_contours, f, P, reject)
     if method == 'optimal':
-        lambdas, total_weighted_counts, total_err = optimal(sci_data, err_data, lambdas,
-                                                            lam_intervals, N_contours, f, reject)
+        lambdas, total_weighted_counts, total_err, contours = optimal(sci_data, err_data, lambdas,
+                                                            lam_intervals, N_contours, f, reject) ################ CHANGE!!!!!
+        return contours
         try:
             if total_weighted_counts == None:
                 print('Switching to \'auto\' from the Grey process', '\n')
@@ -1119,10 +1096,10 @@ def extract(fname):
             pass
     if method == 'auto':
         lambdas, total_weighted_counts, total_err = auto_extract(sci_data, err_data, lambdas,
-                                                                 P, reject)
+                                                                 P, reject, f, strict)
     if method == 'manual':
         lambdas, total_weighted_counts, total_err = manual_extract(sci_data, err_data, lambdas,
-                                                                   P, reject)
+                                                                   P, reject, strict)
     '''
     if deviation:
         mu, sig = calc_deviation(total_weighted_counts, total_err, lambdas, 6650, 6750)
@@ -1181,8 +1158,8 @@ def extract(fname):
 def write_fits_table(fname, fout, lambdas, total_weighted_counts, total_err):
     #modified from http://docs.astropy.org/en/stable/io/fits/
     hdu = fits.BinTableHDU.from_columns([fits.Column(name='Wavelength', array=lambdas, format ='E'),
-                                         fits.Column(name='Counts', array=total_weighted_counts, format='E'),
-                                         fits.Column(name='Error', array=total_err, format='E')])
+                                         fits.Column(name='Counts', array=total_weighted_counts, format='E')])#,
+                                         #fits.Column(name='Error', array=total_err, format='E')])
     hdr = fits.getheader(fname)
     primary_hdu = fits.PrimaryHDU(header=hdr)
     hdul = fits.HDUList([primary_hdu, hdu])
@@ -1190,17 +1167,35 @@ def write_fits_table(fname, fout, lambdas, total_weighted_counts, total_err):
     return
 
 def write_ascii_header(fname, fout):
-    keywords = ['DATE', 'TELRA', 'TELDEC', 'ZD', 'EXPTIME']
+    keywords = ['DATE-OBS', 'TELESCOP', 'INSTRUME', 'OBJECT', 'UT', 'ST', 'MJD', 'OBSERVAT', 'TELRA', 'TELDEC',
+                'TELEQNOX', 'PARANGLE', 'STRUCTAZ', 'STRUCTEL', 'HA', 'ZD', 'AIRMASS', 'TRAJDIR', 'EXPTIME']
+    #update above list and new keywords will be handled correctly
     kw_len = 8
     eql = '= '
+    octo = '#'
     val_len = 20
-    cmt_len = 49 #give space for '#' at beginning of line (otherwise 50)
+    cmt_len = 50-len(octo) #give space for '#' at beginning of line (otherwise 50)
     hdr = fits.getheader(fname)
     vals = []
     comments = []
+    key_errors = []
+    
     for kw in keywords:
-        vals.append(str(hdr[kw]))
-        comments.append(' / ' + hdr.comments[kw])
+        try:
+            vals.append(str(hdr[kw]))
+        except KeyError:
+            print('Keyword '+kw+' not present in header.')
+            key_errors.append(kw)
+        else:
+            if kw=='UT':
+                ut_cmt = 'Universal time (UTC) at start of exposure'
+                comments.append(' / ' + ut_cmt)
+            else:
+                comments.append(' / ' + hdr.comments[kw])
+
+    for ke in key_errors:
+        keywords.remove(ke)
+        
     for i in range(len(keywords)):
         while len(keywords[i]) < kw_len:
             keywords[i]+=' '
@@ -1211,15 +1206,14 @@ def write_ascii_header(fname, fout):
 
     header_string = ''
     for i in range(len(keywords)):
-        header_string+='#'+keywords[i]
+        header_string+=octo+keywords[i]
         header_string+=eql
         header_string+=vals[i]
         header_string+=comments[i]
     header_string+='\n'
 
-    #now, header_string is correct, 80 character lines..
-    #figure out how to write into a file correctly
-    
+    #now, header_string is correct, 80 character lines...
+    #write into table
     f = open(fout, "r")
     contents = f.readlines()
     f.close()
