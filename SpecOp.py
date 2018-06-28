@@ -1,25 +1,23 @@
 import numpy as np
 import numpy.ma as ma
+from numpy import pi
 import matplotlib
 matplotlib.use('TkAgg') #absolutely essential!!!
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle, Rectangle
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg 
 from astropy.io import fits
-from scipy.optimize import curve_fit
 from astropy.table import Table
-import sys                                                                           
-from numpy import pi
 from scipy import interpolate as interp
 import scipy.integrate as integrate
-
+from scipy.optimize import curve_fit
+import sys
+import time
 try:
     import tkinter as tk
 except ImportError:
     #possibly ModuleNotFoundError
     import Tkinter as tk
-
-import time
 
 def gui_process_select():
     args = ['Black and White', 'Grey']
@@ -53,19 +51,7 @@ def gui_process_select():
     master.destroy()
     return arg_list_NONLOCAL_Proc
 
-def gui_inputs_G():
-    args = ['Method', 'f', 'P', 'Lambda min', 'Lambda max',  'reject', 'strict', 'fout', 'fmt']
-    defaults = ['auto','0.95', '1.0', '', '', 'False', 'True', '', 'ascii.basic']
-    descriptions = ['Extraction algorithm, auto or manual',
-                    'Fraction of light used to calculate include pixels',
-                    'Power of S/N weighted average',
-                    'Beginning of wavelength range (Angstroms, smallest possible if blank)',
-                    'End of wavelength range (Angstroms, largest possible if blank)',
-                    'Reject pixels with negative counts and |S/N| < 1/3',
-                    'Only include pix if ceneter is within aperture, otherwise any part counts',
-                    'Name of output table (leave blank to not save a table)',
-                    'Format of table (eg: ascii.basic, ascii.csv, fits, and more)']
-
+def gui_input_params(title_txt, args, defaults, descriptions):
     master = tk.Tk()
     master.wm_title('Grey Extraction Options')
     for i in range(0, len(args)):
@@ -84,77 +70,15 @@ def gui_inputs_G():
         for i in range(0, len(args)):
             vals.append(entries[i].get())
 
-        global arg_list_NONLOCAL_G
-        arg_list_NONLOCAL_G = vals
+        global arg_list_NONLOCAL
+        arg_list_NONLOCAL = vals
         master.quit()
 
     tk.Button(master, text = 'Submit', command = read_args).grid(row=len(args)+2, column=0)
 
     tk.mainloop()
     master.destroy()
-    return arg_list_NONLOCAL_G
-
-def gui_inputs_BW():
-
-    args = ['Method', 'f', 'P', 'Lambda min', 'Lambda max', 'Lambda Intervals', 'N Contours', 'reject', 'fout', 'fmt']
-    defaults = ['optimal', '0.95', '1.0', '', '', '1', '100', 'False', '', 'ascii.basic']
-    descriptions = ['Extraction algorithm, simple or optimal',
-                    'Fraction of light used to calculate include pixels',
-                    'Power of S/N weighted average',
-                    'Beginning of wavelength range (Angstroms, smallest possible if blank)',
-                    'End of wavelength range (Angstroms, largest possible if blank)',
-                    'Number of intervals into which wavelength range is divided',
-                    'Number of contours used to find pixels satisfying enclosed light fraction.',
-                    'Reject pixels with negative counts and |S/N| < 1/3',
-                    'Name of output table (leave blank to not save a table)',
-                    'Format of table (eg: ascii.basic, ascii.csv, fits, and more)']
-        
-    master = tk.Tk()
-    master.wm_title('Black and White Extraction Options')
-        
-    for i in range(0, len(args)):
-        tk.Label(master, text = args[i]).grid(row=i, column = 0)
-        tk.Label(master, text = descriptions[i]).grid(row=i, column = 2)
-
-    entries = []
-    for i in range(0, len(args)):
-        e_i = tk.Entry(master)
-        entries.append(e_i)
-        e_i.grid(row=i, column = 1)
-        e_i.insert(0, defaults[i])
-
-    def read_args():
-        vals = []
-        for i in range(0, len(args)):
-            vals.append(entries[i].get())
-
-        global arg_list_NONLOCAL_BW
-        arg_list_NONLOCAL_BW = vals
-        master.quit()
-        
-    #tk.Button(master, text = 'Run', command = master.quit).grid(row=7, column=1)
-    tk.Button(master, text = 'Submit', command = read_args).grid(row=len(args)+2, column=0)
-
-    tk.mainloop()
-    master.destroy()
-    return arg_list_NONLOCAL_BW
-
-
-'''
-class pix:
-    def __init__(self, x, y, spec):
-        self.x = x
-        self.y = y
-        self.img_x = x+1
-        self.img_y = y+1
-        self.coords = (self.x,self.y)
-        self.img_coords = (self.img_x,self.img_y)
-        self.include = False
-        self.spec = spec
-
-    def update_inc(self, inc_bool):
-        self.include = inc_bool
-'''
+    return arg_list_NONLOCAL
         
 def get_data(fname):
     '''
@@ -168,8 +92,8 @@ def get_data(fname):
     
     global vert
     global horiz
-    vert = hdu.header['NAXIS2'] #24
-    horiz = hdu.header['NAXIS1'] #42
+    vert = hdu.header['NAXIS2'] 
+    horiz = hdu.header['NAXIS1'] 
 
     lam_len = hdu.header['NAXIS3']
     lam_init = hdu.header['CRVAL3']
@@ -178,11 +102,8 @@ def get_data(fname):
 
     sci_data = hdu.data
     err_data = errhdu.data
-
-    lambdas = np.array([lam_init])
-    for i in range(0, lam_len-1):
-        lambdas = np.append(lambdas, lambdas[i]+lam_delt)
-
+    lambdas = np.array([lam_init+i*lam_delt for i in range(0,lam_len)])
+   
     return lam_len, lam_init, lam_delt, lam_end, sci_data, err_data, lambdas
 
 def display_img(flat_img, title='image display'):
@@ -214,7 +135,6 @@ def centroid(flattened_image):
     '''
     Find "center of mass" centroid of a flat image
     '''
-    
     total_counts = np.sum(flattened_image)
 
     xcom = 0.0
@@ -251,7 +171,7 @@ def manual_centroid(data, y_range, x_range, lam_min, lam_max):
     return [xcom, ycom]
 
 
-def find_r_scatter(flattened_image, xcom, ycom, f):
+def find_r_scatter(flattened_image, xcom, ycom, f, plot=True):
 
     #flattened_image = np.sum(data, axis = 0)
 
@@ -287,24 +207,24 @@ def find_r_scatter(flattened_image, xcom, ycom, f):
     spread_guess = distance_formula(horiz/2., horiz, vert/2., vert)/2.
     popt, pcov = curve_fit(gauss, r_vals, c_vals, p0=[max(c_vals),0.,spread_guess])
     #print(popt)
-
-    print('Displaying spatial profile fit...')
-    plt.ion()
-    fig = plt.figure()
-    ax = fig.add_subplot(111)
-    ax.scatter(r_vals, c_vals, s = 0.3, color = 'k')
-    x_plot=np.linspace(0, max(r_vals), 50)
-    ax.plot(x_plot, gauss(x_plot, *popt), color='r')
-    ax.set_title('Spatial Profile Gaussian Fit')
-    ax.set_xlabel('Radius (pix)')
-    ax.set_ylabel('Counts')
-    plt.show()
-    blah = input('Press enter to proceed')
-    plt.close()
-    plt.ioff()
+    if plot:
+        print('Displaying spatial profile fit...')
+        plt.ion()
+        fig = plt.figure()
+        ax = fig.add_subplot(111)
+        ax.scatter(r_vals, c_vals, s = 0.3, color = 'k')
+        x_plot=np.linspace(0, max(r_vals), 50)
+        ax.plot(x_plot, gauss(x_plot, *popt), color='r')
+        ax.set_title('Spatial Profile Gaussian Fit')
+        ax.set_xlabel('Radius (pix)')
+        ax.set_ylabel('Counts')
+        plt.show()
+        blah = input('Press enter to proceed')
+        plt.close()
+        plt.ioff()
 
     #Now, the fit is really good, use FWHM as aperture?
-    #r_aperture = (2*np.log(2.))**0.5 * popt[2] #FWHM/2 definition
+    r_FWHM = (2*np.log(2.))**0.5 * popt[2] #FWHM/2 definition
     #let's do an integral to get the light fraction f instead...
     
     full_integral, f_i_err = integrate.quad(gauss, 0., np.inf, tuple(popt))
@@ -322,13 +242,13 @@ def find_r_scatter(flattened_image, xcom, ycom, f):
             break
         i+=1
     #print("calculated fraction:", frac)
-    return r_vals[i-1], frac, baseline
+    return r_vals[i-1], frac, baseline, r_FWHM
 
 def distance_formula(x1, x2, y1, y2):
     '''
     distance between two points on cartesian plane
     '''
-    dist = ( (x1-x2)**2 + (y1-y2)**2 )**(0.5)
+    dist = ( (x1-x2)**2. + (y1-y2)**2. )**(0.5)
     return dist
 
 def calc_radius(contours, index, centroid):
@@ -358,14 +278,14 @@ def calc_deviation(counts, err, lambdas, lam_min, lam_max):
 
 def check_intersect(h_line, any_line):
     '''
-    takes line segments defined by two points each, one must be horizontal
-    checks if they intersect
+    takes line segments defined by two points each (one must be horizontal)
+    and checks if they intersect
     '''
 
     intersect = False
-    
+
     if h_line[0,1] != h_line[1,1]:
-        print("WOAH NOT HORIZONTAL")
+        print("FIDUCIAL LINE NOT HORIZONTAL")
         
     h_xsort = np.sort(h_line[:,0])
     h_yval = h_line[0,1]
@@ -397,8 +317,6 @@ def check_intersect(h_line, any_line):
     return intersect
 
 def check_contour(contours, i, bool_grid, pix_inside):
-    #almost_vertices = contours.collections[i].get_paths()[0]
-    #points = almost_vertices.vertices
     points = contours[i]
     x_conts = points[:,0] + np.random.uniform(-0.001, 0.001) #bs, change
     y_conts = points[:,1] + np.random.uniform(-0.001, 0.001) #bs, change
@@ -413,7 +331,6 @@ def check_contour(contours, i, bool_grid, pix_inside):
             #check if line intersects with EVERY line segment
             #to do that, need to evaluate orientations
 
-            #horiz_line = np.array([[x+0.5, y+0.5], [horiz+1., y+0.5]])
             horiz_line = np.array([[x+0.,y+0.],[horiz+0.5,y+0.]])
             n_intersections = 0
 
@@ -433,13 +350,6 @@ def check_contour(contours, i, bool_grid, pix_inside):
             
     return bool_grid, pix_inside
 
-'''
-def add_half(array):
-    for i in range(0, array.shape[0]):
-        for j in range(0, array.shape[1]):
-            array[i,j] += 0.5
-    return array
-'''
 
 def contour_extraction(data, lam_min, lam_max, N_contours, f):
     '''
@@ -480,23 +390,10 @@ def contour_extraction(data, lam_min, lam_max, N_contours, f):
     #print("n:", n)
     #print("nnn:", nnn)
     contour_array = np.array([contours.collections[i].get_paths()[0].vertices for i in range(n)])
-    cached_contour_array = np.array(contour_array)#get rid of this soon
+    #cached_contour_array = np.array(contour_array)#get rid of this soon
     
-    #remove all open contours as they can cause problems with algorithm
-    
-    #thresh = 0.001
     problem_idxs = []
-    '''
-    for i in range(n):
-        verts = contour_array[i]
-        if np.abs(verts[0,0]-verts[-1,0])>thresh or np.abs(verts[0,1]-verts[-1,1])>thresh:
-            if not ( (verts[0,1]>=((vert-1)-0.1) and verts[-1,1]>=((vert-1)-0.1)) or (verts[0,1]<0.1 and verts[-1,1]<0.1) ):
-                #contour open and does not go off plot vertically, remove it...
-                print('deleting contour', i)
-                open_idxs.append(i)
-    '''
-    #do I want to check if centroid is near xcom or ycom??? then delete more contours.....
-    #will this replace the culling code above as well? I can't think of any exceptions...
+    #Only study contours centered around center of source, discard rest
     r_thresh = 0.1 * (vert**2. + horiz**2.)**0.5 #reasonable fraction of frame diagonal
     xcom = np.mean(contour_array[-1][:,0])
     ycom = np.mean(contour_array[-1][:,1])
@@ -562,9 +459,9 @@ def contour_extraction(data, lam_min, lam_max, N_contours, f):
         
     pix_inside = np.array(pix_inside)
     ax.plot(pix_inside[:,1], pix_inside[:,0], 'bo', markersize=2.)
-    for indx in problem_idxs:
-        ax.plot(cached_contour_array[indx][:,0],cached_contour_array[indx][:,1], 'r') #get rid of this when done debugging
-    ax.plot(xcom, ycom, 'mo')
+    #for indx in problem_idxs:
+    #ax.plot(cached_contour_array[indx][:,0],cached_contour_array[indx][:,1], 'r')
+    #ax.plot(xcom, ycom, 'mo')
     ax.set_title('Enclosed Light Fraction: ' + str(round(enclosed_light,3)), fontsize=20)
     ax.set_xlabel('X pixel', fontsize=14)
     ax.set_ylabel('Y pixel', fontsize=14)
@@ -597,11 +494,11 @@ def strict_distance_clip(xcom, ycom, r):
 '''
 
 def pixel_distance_clip(xcom, ycom, r, strict):
-    
-    #If any part of pixel is within radius, include
-
+    '''
+    not strict - if any part of pixel is within radius, include
+    strict - if center of pixel is within radius, include
+    '''
     included_pix = []
-    print('strict in func:', strict)
     for x in range(0, horiz):
         for y in range(0, vert):
             distance = distance_formula(x, xcom, y, ycom)
@@ -618,11 +515,11 @@ def pixel_distance_clip(xcom, ycom, r, strict):
                         included_pix.append( (y,x) )
 
     return included_pix
-
-
         
 def to_bool(astring):
-    #why not just chech first letter for t/f or T/F?
+    '''
+    convert string to boolean
+    '''
     if astring[0] == 'T' or astring[0] == 't':
         return True
     elif astring[0] == 'F' or astring[0] == 'f':
@@ -631,7 +528,10 @@ def to_bool(astring):
         print('ERROR: invalid bool')
 
 def check_YorN(YN_message):
-
+    '''
+    Handles command line y/n decisions
+    defaults to yes
+    '''
     misunderstood = 'Input not understood. Type Y/y or N/n...'
     YN_bool= False #Yes:True, No:False
     understood = False
@@ -660,15 +560,17 @@ def check_YorN(YN_message):
     return YN_bool
 
 def check_number_input(msg, dtype, bounds=[], rec_val=None):
-
-    #requires upper AND lower bound!!!
+    '''
+    processes command line number inputs
+    allows for bounds and recommeneded values
+    '''
     error_dtype_msg = 'Try again. Numeric values only!'
     error_range_msg = 'Value out of bounds!'
     valid = False
 
     rec = ': '
     if rec_val != None:
-        rec = ' ('+str(rec_val)+' recommended: )'
+        rec = ' ('+str(rec_val)+' recommended): '
     
     while not valid:
         num = input(msg+rec)
@@ -690,6 +592,10 @@ def check_number_input(msg, dtype, bounds=[], rec_val=None):
     return num
         
 def estimate_background(frame, wx, wy):
+    '''
+    finds mean and stddev of outside frame of image
+    '''
+    
     #frame must be a flat image, numpy array
     bg_counts = np.array([])
     #frame = sci_data[lamcoord,:,:] 
@@ -776,7 +682,7 @@ def aperture_algorithm(sci_data, lambdas, lam_guess, y_guess, x_guess, f, strict
         print()
         
     plt.ioff()
-    r_aperture, frac, baseline = find_r_scatter(flattened_image, xcom, ycom, f)
+    r_aperture, frac, baseline, r_FWHM = find_r_scatter(flattened_image, xcom, ycom, f)
     included_pix = pixel_distance_clip(xcom, ycom, r_aperture, strict)
 
     flt_bl_img = flattened_image+baseline
@@ -1041,8 +947,25 @@ def extract(fname):
     plt.close()
     plt.ioff()
     
-    if BlacknWhite:  
-        method, f, P, lam_min, lam_max, lam_intervals, N_contours, reject, fout, fmt = gui_inputs_BW()
+    if BlacknWhite:
+        
+        args_BW = ['Method', 'f', 'P', 'Lambda min', 'Lambda max', 'Lambda Intervals', 'N Contours', 'reject', 'fout', 'fmt']
+        defaults_BW = ['optimal', '0.90', '1.0', '', '', '1', '100', 'False', '', 'ascii.basic']
+        descriptions_BW = ['Extraction algorithm, simple or optimal',
+                           'Fraction of light used to calculate include pixels',
+                           'Power of S/N weighted average',
+                           'Beginning of wavelength range (Angstroms, smallest possible if blank)',
+                           'End of wavelength range (Angstroms, largest possible if blank)',
+                           'Number of intervals into which wavelength range is divided',
+                           'Number of contours used to find pixels satisfying enclosed light fraction.',
+                           'Reject pixels with negative counts and |S/N| < 1/3',
+                           'Name of output table (leave blank to not save a table)',
+                           'Format of table (eg: ascii.basic, ascii.csv, fits, and more)']
+        
+        method, f, P, lam_min, lam_max, lam_intervals, N_contours, reject, fout, fmt = gui_input_params('Black and White Extraction Options',
+                                                                                                        args_BW,
+                                                                                                        defaults_BW,
+                                                                                                        descriptions_BW)
 
         f = float(f)
         P = float(P)
@@ -1052,7 +975,23 @@ def extract(fname):
         #write = to_bool(write)
         
     elif Grey:
-        method, f, P, lam_min, lam_max, reject, strict, fout, fmt = gui_inputs_G()
+        
+        args_G = ['Method', 'f', 'P', 'Lambda min', 'Lambda max',  'reject', 'strict', 'fout', 'fmt']
+        defaults_G = ['auto','0.90', '1.0', '', '', 'False', 'False', '', 'ascii.basic']
+        descriptions_G = ['Extraction algorithm, auto or manual',
+                          'Fraction of light used to calculate include pixels',
+                          'Power of S/N weighted average',
+                          'Beginning of wavelength range (Angstroms, smallest possible if blank)',
+                          'End of wavelength range (Angstroms, largest possible if blank)',
+                          'Reject pixels with negative counts and |S/N| < 1/3',
+                          'Only include pix if center is within aperture radius, otherwise any part counts',
+                          'Name of output table (leave blank to not save a table)',
+                          'Format of table (eg: ascii.basic, ascii.csv, fits, and more)']
+
+        method, f, P, lam_min, lam_max, reject, strict, fout, fmt = gui_input_params('Grey Extraction Options',
+                                                                                      args_G,
+                                                                                      defaults_G,
+                                                                                      descriptions_G)
 
         f = float(f)
         P = float(P)
@@ -1087,7 +1026,6 @@ def extract(fname):
     if method == 'optimal':
         lambdas, total_weighted_counts, total_err, contours = optimal(sci_data, err_data, lambdas,
                                                             lam_intervals, N_contours, f, reject) ################ CHANGE!!!!!
-        return contours
         try:
             if total_weighted_counts == None:
                 print('Switching to \'auto\' from the Grey process', '\n')
@@ -1152,9 +1090,10 @@ def extract(fname):
             return
     
     else:
-        print('Returning arrays of wavelength, weighted counts, and errors...', '\n')
-        return lambdas, total_weighted_counts, total_err
-
+        #print('Returning arrays of wavelength, weighted counts, and errors...', '\n')
+        #return lambdas, total_weighted_counts, total_err
+        return
+    
 def write_fits_table(fname, fout, lambdas, total_weighted_counts, total_err):
     #modified from http://docs.astropy.org/en/stable/io/fits/
     hdu = fits.BinTableHDU.from_columns([fits.Column(name='Wavelength', array=lambdas, format ='E'),
@@ -1167,8 +1106,10 @@ def write_fits_table(fname, fout, lambdas, total_weighted_counts, total_err):
     return
 
 def write_ascii_header(fname, fout):
-    keywords = ['DATE-OBS', 'TELESCOP', 'INSTRUME', 'OBJECT', 'UT', 'ST', 'MJD', 'OBSERVAT', 'TELRA', 'TELDEC',
-                'TELEQNOX', 'PARANGLE', 'STRUCTAZ', 'STRUCTEL', 'HA', 'ZD', 'AIRMASS', 'TRAJDIR', 'EXPTIME']
+    keywords = ['NAXIS3', 'CRVAL3', 'CDELT3', 'CUNIT3','DATE-OBS', 'TELESCOP', 'INSTRUME',
+                'OBJECT', 'UT', 'ST', 'MJD', 'OBSERVAT', 'TELRA', 'TELDEC',
+                'TELEQNOX', 'PARANGLE', 'STRUCTAZ', 'STRUCTEL', 'HA', 'ZD',
+                'AIRMASS', 'TRAJDIR', 'EXPTIME']
     #update above list and new keywords will be handled correctly
     kw_len = 8
     eql = '= '
