@@ -12,12 +12,22 @@ from scipy import interpolate as interp
 import scipy.integrate as integrate
 from scipy.optimize import curve_fit
 import sys
+import os
 import time
+import user_inputs as uin #houses parameters for batch running
 try:
     import tkinter as tk
 except ImportError:
     #possibly ModuleNotFoundError
     import Tkinter as tk
+
+def set_input(on_switch):
+    global usr_input
+    if on_switch:
+        usr_input=True
+    else:
+        usr_input=False
+    return
 
 def gui_process_select():
     args = ['Black and White', 'Grey']
@@ -207,6 +217,8 @@ def find_r_scatter(flattened_image, xcom, ycom, f, plot=True):
     spread_guess = distance_formula(horiz/2., horiz, vert/2., vert)/2.
     popt, pcov = curve_fit(gauss, r_vals, c_vals, p0=[max(c_vals),0.,spread_guess])
     #print(popt)
+    if not usr_input:
+        plot=False
     if plot:
         print('Displaying spatial profile fit...')
         plt.ion()
@@ -468,7 +480,10 @@ def contour_extraction(data, lam_min, lam_max, N_contours, f):
     ax.set_xlim( (0,horiz) )
     ax.set_ylim( (0,vert) ) 
     plt.show()
-    proceed = check_YorN('Proceed with this process?')
+    if usr_input:
+        proceed = check_YorN('Proceed with this process?')
+    else:
+        proceed = True
     plt.close()
     plt.ioff()
     if not proceed:
@@ -477,21 +492,6 @@ def contour_extraction(data, lam_min, lam_max, N_contours, f):
     else:
         return pix_inside, contours #################### CHANGE!!!
 
-'''
-def strict_distance_clip(xcom, ycom, r):
-    
-    #If pixel center is within radius, include
-
-    included_pix = []
-
-    for x in range(0, horiz):
-        for y in range(0, vert):
-            distance = distance_formula(x, xcom, y, ycom)
-            if distance <= r:
-                included_pix.append( (y,x) )
-
-    return included_pix
-'''
 
 def pixel_distance_clip(xcom, ycom, r, strict):
     '''
@@ -651,8 +651,12 @@ def aperture_algorithm(sci_data, lambdas, lam_guess, y_guess, x_guess, f, strict
 
     proceed = False
     while not proceed:
-        wav_range = check_number_input('How many wavelength bins to flatten over?', int,
+        if usr_input:
+            wav_range = check_number_input('How many wavelength bins to flatten over?', int,
                                        [2, 2*upperbound-1], rec_val=20)
+        else:
+            wav_range = uin.wav_range
+            
         wav_rad = int(wav_range/2)
     
         plt.ion()
@@ -668,18 +672,21 @@ def aperture_algorithm(sci_data, lambdas, lam_guess, y_guess, x_guess, f, strict
         xcom, ycom = centroid_aperture(include_centroid, flattened_image)
 
         #show centroid
-        fig, ax = display_img(flattened_image,
-                              'Centroid over '+str(wav_range)+' wavelength bins')
-        rec = Rectangle((xcom-0.5,ycom-0.5),1,1,
-                        linewidth=1,edgecolor='r',facecolor='none')
-        ax.add_patch(rec)
-        plt.show()
-        print('Wavelength Range:',
-              list(np.round([lambdas[lam_guess-wav_rad],lambdas[lam_guess+wav_rad]], 1)))
-        print('Centroid (X,Y):', tuple(np.round((xcom, ycom),2)))
-        proceed = check_YorN('Proceed?')
-        plt.close()
-        print()
+        if usr_input:
+            fig, ax = display_img(flattened_image,
+                                  'Centroid over '+str(wav_range)+' wavelength bins')
+            rec = Rectangle((xcom-0.5,ycom-0.5),1,1,
+                            linewidth=1,edgecolor='r',facecolor='none')
+            ax.add_patch(rec)
+            plt.show()
+            print('Wavelength Range:',
+                  list(np.round([lambdas[lam_guess-wav_rad],lambdas[lam_guess+wav_rad]], 1)))
+            print('Centroid (X,Y):', tuple(np.round((xcom, ycom),2)))
+            proceed = check_YorN('Proceed?')
+            plt.close()
+            print()
+        else:
+            proceed = True
         
     plt.ioff()
     r_aperture, frac, baseline, r_FWHM = find_r_scatter(flattened_image, xcom, ycom, f)
@@ -740,13 +747,19 @@ def auto_extract(sci_data, err_data, lambdas, P, reject, f, strict):
 
     mask = np.zeros(sci_data.shape, dtype = int)
     ma_sci_data = ma.masked_array(sci_data, mask=mask)
-    set_frame_params = True
+    set_frame_params = True 
     while not proceed:
         found = False
-        if set_frame_params:
+        
+        if set_frame_params and usr_input:
             wx = check_number_input('X background frame width', int, [1,int(horiz/2.)-1], rec_val=4)
             wy = check_number_input('Y background frame width', int, [1,int(vert/2.)-1], rec_val=3)
             sig_thresh = check_number_input('S/N threshold', float, [1,np.inf], rec_val='>5')
+        else:
+            wx = uin.wx
+            wy = uin.wy
+            sig_thresh = uin.sig_thresh
+            
         while not found:
             max_idx = np.unravel_index(np.argmax(ma_sci_data), ma_sci_data.shape)
             lamcoord, ycoord, xcoord = max_idx
@@ -778,29 +791,35 @@ def auto_extract(sci_data, err_data, lambdas, P, reject, f, strict):
         det_signif = (ma_sci_data[lamcoord,ycoord,xcoord]-bg_mean)/bg_dev
 
         #show image center guess
-        fig, ax = display_img(frame, 'Current Coordinate Guess')
-        rec1 = Rectangle((xcoord-0.5,ycoord-0.5),1,1,
-                        linewidth=1,edgecolor='r',facecolor='none')
-        rec2 = Rectangle((wx-0.5,wy-0.5),horiz-2*wx,vert-2*wy,
-                        linewidth=1,edgecolor='w',facecolor='none')
-        ax.add_patch(rec1)
-        ax.add_patch(rec2)
-        plt.show()
+        if usr_input:
+            fig, ax = display_img(frame, 'Current Coordinate Guess')
+            rec1 = Rectangle((xcoord-0.5,ycoord-0.5),1,1,
+                             linewidth=1,edgecolor='r',facecolor='none')
+            rec2 = Rectangle((wx-0.5,wy-0.5),horiz-2*wx,vert-2*wy,
+                             linewidth=1,edgecolor='w',facecolor='none')
+            ax.add_patch(rec1)
+            ax.add_patch(rec2)
+            plt.show()
 
-        #ask if it's good
-        print('Image Coordinates (X,Y): '+'('+str(xcoord)+','+str(ycoord)+')')
-        print('Wavelength (A): '+str(round(lamval,0)))
-        print('Detection significance: ' +str(round(det_signif,0)))
-        proceed_msg = 'Is the object contained in this frame?'
-        proceed = check_YorN(proceed_msg)
-        if proceed:
-            center_guess_idx = max_idx
-        else:
-            #mask,update, keep going
-            ma_sci_data.mask[lamcoord,:,:] = 1
-            set_frame_params=check_YorN('Update background params?')
+            #ask if it's good
+            print('Image Coordinates (X,Y): '+'('+str(xcoord)+','+str(ycoord)+')')
+            print('Wavelength (A): '+str(round(lamval,0)))
+            print('Detection significance: ' +str(round(det_signif,0)))
+            proceed_msg = 'Is the object contained in this frame?'
+            proceed = check_YorN(proceed_msg)
+            if proceed:
+                center_guess_idx = max_idx
+            else:
+                #mask,update, keep going
+                ma_sci_data.mask[lamcoord,:,:] = 1
+                set_frame_params=check_YorN('Update background params?')
+            plt.close()
             
-        plt.close()
+        else:
+            proceed=True
+            center_guess_idx = max_idx
+            
+            
     plt.ioff()
     
     #centroid and find pixels within FWHM radius
@@ -816,23 +835,13 @@ def auto_extract(sci_data, err_data, lambdas, P, reject, f, strict):
 def simple(sci_data, err_data, lambdas, N_contours, f, P, reject):
 
     print('Constructing spatial profile...', '\n') #NEED TO ALLOW FOR POSSIBILITY OF MULTIPLE INTERVALS
-    included_pix = contour_extraction(sci_data, 0, len(lambdas), N_contours, f)
     
-    #xcom, ycom = centroid(sci_data, vert, horiz, lam_min_idx, lam_max_idx)
-    #rmax = find_r_scatter(sci_data, xcom, ycom, f, horiz, vert)
-
-    '''
-    if strict:
-        included_pix = strict_distance_clip(sci_data, xcom, ycom, rmax)
-    else:
-        included_pix = loose_distance_clip(sci_data, xcom, ycom, rmax)
-    '''
+    included_pix = contour_extraction(sci_data, 0, len(lambdas), N_contours, f)
     
     print('Performing S/N weighted average...')
 
     lambdas, total_weighted_counts, total_err = weighted_sum_counts(included_pix, sci_data, err_data,
                                                                     lambdas, P, reject)
-    
     return lambdas, total_weighted_counts, total_err
 
 
@@ -908,44 +917,47 @@ def optimal(sci_data, err_data, lambdas, lam_intervals, N_contours, f, reject):
             
         total_weighted_counts = np.append(total_weighted_counts, interval_weighted_counts)
         total_err = np.append(total_err, interval_err)
-    print(total_weighted_counts)
-    print(total_err)
         
     return lambdas, total_weighted_counts, total_err, contours ###################### CHANGE!!!!!!!!
 
 
-def extract(fname):
+def extract(fname, cube_dir=os.getcwd(), spec_dir=os.getcwd(), fout=''):
     '''
     Extract spectrum in high S/N region using S/N weighted average 
     '''
-
+    
+    cwd = os.getcwd()
+    os.chdir(cube_dir)
+    
     #deviation = False
     print('Loading data...')
     lam_len, lam_init, lam_delt, lam_end, sci_data, err_data, lambdas = get_data(fname)
-
+    os.chdir(cwd)
     #show user a flattened image to decide between BW or G
-    plt.ion()
-    fig, ax = display_img(np.sum(sci_data, axis=0), 'Image summed over all wavelengths')
-    plt.show()
-    blah = input('Press enter to proceed')
-    plt.close()
-    plt.ioff()
-    
-    print('Waiting for user inputs...', '\n')
-    BlacknWhite, Grey = gui_process_select()
-    if BlacknWhite=='':
-        Grey = True
-        BlacknWhite=False
-    else:
-        if BlacknWhite[0] == 'y' or BlacknWhite[0] == 'Y':
-            Grey=False
-            BlacknWhite=True
-        elif Grey[0] == 'y' or Grey[0] == 'Y':
-            Grey=True
+    if usr_input:
+        plt.ion()
+        fig, ax = display_img(np.sum(sci_data, axis=0), 'Image summed over all wavelengths')
+        plt.show()
+        blah = input('Press enter to proceed')
+        plt.close()
+        plt.ioff()
+
+    if usr_input:
+        print('Waiting for user inputs...', '\n')
+        BlacknWhite, Grey = gui_process_select()
+        if BlacknWhite=='':
+            Grey = True
             BlacknWhite=False
-            
-    plt.close()
-    plt.ioff()
+        else:
+            if BlacknWhite[0] == 'y' or BlacknWhite[0] == 'Y':
+                Grey=False
+                BlacknWhite=True
+            elif Grey[0] == 'y' or Grey[0] == 'Y':
+                Grey=True
+                BlacknWhite=False
+    else:
+        BlacknWhite = uin.BlacknWhite
+        Grey = uin.Grey
     
     if BlacknWhite:
         
@@ -961,18 +973,21 @@ def extract(fname):
                            'Reject pixels with negative counts and |S/N| < 1/3',
                            'Name of output table (leave blank to not save a table)',
                            'Format of table (eg: ascii.basic, ascii.csv, fits, and more)']
-        
-        method, f, P, lam_min, lam_max, lam_intervals, N_contours, reject, fout, fmt = gui_input_params('Black and White Extraction Options',
+        if usr_input:
+            method, f, P, lam_min, lam_max, lam_intervals, N_contours, reject, fout, fmt = gui_input_params('Black and White Extraction Options',
                                                                                                         args_BW,
                                                                                                         defaults_BW,
                                                                                                         descriptions_BW)
-
-        f = float(f)
-        P = float(P)
-        lam_intervals = int(lam_intervals)
-        N_contours = int(N_contours)
-        reject = to_bool(reject)
-        #write = to_bool(write)
+            f = float(f)
+            P = float(P)
+            lam_intervals = int(lam_intervals)
+            N_contours = int(N_contours)
+            reject = to_bool(reject)
+            
+        else:
+            method, f, P, lam_min, lam_max, lam_intervals, N_contours, reject, fout, fmt = [uin.method, uin.f, uin.P, uin.lam_min,
+                                                                                            uin.lam_max, uin.lam_intervals, uin.N_contours,
+                                                                                            uin.reject, uin.fout, uin.fmt]
         
     elif Grey:
         
@@ -988,21 +1003,26 @@ def extract(fname):
                           'Name of output table (leave blank to not save a table)',
                           'Format of table (eg: ascii.basic, ascii.csv, fits, and more)']
 
-        method, f, P, lam_min, lam_max, reject, strict, fout, fmt = gui_input_params('Grey Extraction Options',
+        if usr_input:
+            method, f, P, lam_min, lam_max, reject, strict, fout, fmt = gui_input_params('Grey Extraction Options',
                                                                                       args_G,
                                                                                       defaults_G,
                                                                                       descriptions_G)
-
-        f = float(f)
-        P = float(P)
-        reject = to_bool(reject)
-        strict = to_bool(strict)
-
+            f = float(f)
+            P = float(P)
+            reject = to_bool(reject)
+            strict = to_bool(strict)
+            
+        else:
+            method, f, P, lam_min, lam_max, reject, strict, fout, fmt = [uin.method, uin.f, uin.P,
+                                                                         uin.lam_min, uin.lam_max, uin.reject,
+                                                                         uin.strict, uin.fout, uin.fmt]
+        
     if len(fout) == 0:
         write = False
     else:
         write = True
-
+    
     ### Clip Wavelength Range ###
     if lam_min == '':
         lam_min_idx = 0
@@ -1073,18 +1093,21 @@ def extract(fname):
     #master.destroy()
     
     if write:
+        #os.chdir(spec_dir)
         print('Writing data to ' + fmt + ' table with name ' + fout + '...', '\n')
         if fmt == 'fits':
             #call fits writing function
-            write_fits_table(fname, fout, lambdas, total_weighted_counts, total_err)
+            write_fits_table(fname, fout, lambdas, total_weighted_counts, total_err, cube_dir, spec_dir)
             return
         elif len(fmt)>5:
             if fmt[0:5] == 'ascii':
                 #call header writing function
                 tout = Table(data = [lambdas, total_weighted_counts, total_err], names = ['Wavelength', 'Counts', 'Error'])
+                os.chdir(spec_dir)
                 tout.write(fout, format = fmt)
-                write_ascii_header(fname, fout)
+                write_ascii_header(fname, fout, cube_dir, spec_dir)
         else:
+            os.chdir(spec_dir)
             tout = Table(data = [lambdas, total_weighted_counts, total_err], names = ['Wavelength', 'Counts', 'Error'])
             tout.write(fout, format = fmt)
             return
@@ -1094,38 +1117,42 @@ def extract(fname):
         #return lambdas, total_weighted_counts, total_err
         return
     
-def write_fits_table(fname, fout, lambdas, total_weighted_counts, total_err):
+def write_fits_table(fname, fout, lambdas, total_weighted_counts, total_err, cube_dir, spec_dir):
     #modified from http://docs.astropy.org/en/stable/io/fits/
     hdu = fits.BinTableHDU.from_columns([fits.Column(name='Wavelength', array=lambdas, format ='E'),
-                                         fits.Column(name='Counts', array=total_weighted_counts, format='E')])#,
-                                         #fits.Column(name='Error', array=total_err, format='E')])
+                                         fits.Column(name='Counts', array=total_weighted_counts, format='E'),
+                                         fits.Column(name='Error', array=total_err, format='E')])
+    os.chdir(cube_dir)
     hdr = fits.getheader(fname)
     primary_hdu = fits.PrimaryHDU(header=hdr)
     hdul = fits.HDUList([primary_hdu, hdu])
+    os.chdir(spec_dir)
     hdul.writeto(fout)
     return
 
-def write_ascii_header(fname, fout):
+def write_ascii_header(fname, fout, cube_dir, spec_dir):
     keywords = ['NAXIS3', 'CRVAL3', 'CDELT3', 'CUNIT3','DATE-OBS', 'TELESCOP', 'INSTRUME',
                 'OBJECT', 'UT', 'ST', 'MJD', 'OBSERVAT', 'TELRA', 'TELDEC',
                 'TELEQNOX', 'PARANGLE', 'STRUCTAZ', 'STRUCTEL', 'HA', 'ZD',
-                'AIRMASS', 'TRAJDIR', 'EXPTIME']
+                'AIRMASS', 'TRAJDIR', 'EXPTIME', 'IFUSLOT', 'CCDPOS']
     #update above list and new keywords will be handled correctly
     kw_len = 8
     eql = '= '
     octo = '#'
     val_len = 20
     cmt_len = 50-len(octo) #give space for '#' at beginning of line (otherwise 50)
-    hdr = fits.getheader(fname)
     vals = []
     comments = []
     key_errors = []
+    os.chdir(cube_dir)
+    hdr = fits.getheader(fname)
+    os.chdir(spec_dir)
     
     for kw in keywords:
         try:
             vals.append(str(hdr[kw]))
         except KeyError:
-            print('Keyword '+kw+' not present in header.')
+            print('Keyword ' + kw + ' not present in header.')
             key_errors.append(kw)
         else:
             if kw=='UT':
@@ -1151,7 +1178,8 @@ def write_ascii_header(fname, fout):
         header_string+=eql
         header_string+=vals[i]
         header_string+=comments[i]
-    header_string+='\n'
+        header_string+='\n'
+    #header_string+='\n'
 
     #now, header_string is correct, 80 character lines...
     #write into table
@@ -1169,19 +1197,47 @@ def write_ascii_header(fname, fout):
     
     return
         
-    
 
 ############### MAIN ###############
 #calls extract through command line#
 ####################################
-if len(sys.argv) == 2:
-    cmnd_fname = sys.argv[1]
-    extract(cmnd_fname)
-else:
-    print('Error, script takes one argument, the filename.')
-    print('example:')
-    print('$ python SpecOp.py Cu*.fits')
 
+if len(sys.argv) == 2:
+    cmnd_str = sys.argv[1]
+    
+    if cmnd_str=='batch':
+        set_input(False)
+        #call function based on object list
+        for fname in uin.gen_filenames():
+            print('extracting ' + fname)
+            uin.fout='spec_'+fname[:-5]+'.dat'
+            print('fout in main:', uin.fout)
+            extract(fname, uin.path_to_cubes, uin.path_to_spectra)
+        os.chdir(uin.cwd)
+
+    else:
+        set_input(True)
+        extract(cmnd_str)
+
+'''
+elif len(sys.argv) == 3
+    cmnd_fname = sys.argv[1]
+    input_str - sys.argv[2]
+    if input_str == 'batch':
+        set_input(False)
+        #call function based on object list
+        for fname in uin.gen_filenames():
+            uin.fout=='spec_'+fname[:-5]+'.dat'
+            extract(fname, uin.path_to_cubes, uin.path_to_spectra)
+        os.chdir(uin.cwd)
+'''
+        
+'''
+else:
+        print('Error, script takes one argument,, the filename.')
+        print('example:')
+        print('$ python SpecOp.py Cu*.fits')
+'''
 
     
 
